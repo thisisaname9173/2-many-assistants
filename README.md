@@ -107,6 +107,10 @@ Some relevant server settings:
 - **An item is refused?** — It may not be registered in the server's spawn menu, may be admin-only, or may match an active blacklist.
 - **Need help?** — Check the server console and the admin-only `ai_errorlog_dump` output.
 
+## Contact
+
+Questions, issues, or feedback? Reach me on Discord at **`bobbytehcool`**, or leave a comment on the [Steam Workshop page](https://steamcommunity.com/sharedfiles/filedetails/?id=3752580694).
+
 ---
 
 Made for Garry's Mod servers that want an AI helper without handing the AI the keys to the server.
