@@ -68,6 +68,7 @@ net.Receive("AI_GROQ_OpenConfig", function()
 	providerCombo:AddChoice("cerebras", "cerebras", provider == "cerebras")
 	providerCombo:AddChoice("deepseek", "deepseek", provider == "deepseek")
 	providerCombo:AddChoice("xai", "xai", provider == "xai")
+	providerCombo:AddChoice("ollama (configure with local_ai_config)", "ollama", provider == "ollama")
 
 	y = y + 32
 	local modelLabel = vgui.Create("DLabel", frame)
@@ -133,6 +134,10 @@ net.Receive("AI_GROQ_OpenConfig", function()
 	saveButton.DoClick = function()
 		local selectedProvider = providerCombo:GetSelected() or providerCombo:GetValue() or "groq"
 		if selectedProvider == "" then selectedProvider = "groq" end
+		if selectedProvider == "ollama" then
+			chat.AddText(Color(255, 190, 90), "[Local AI] ", color_white, "Use local_ai_config to detect Ollama and select an installed model.")
+			return
+		end
 		local selectedModel = string.Trim(modelEntry:GetValue())
 		local keyValue = string.Trim(keyEntry:GetValue())
 		net.Start("AI_GROQ_UpdateConfig")
@@ -153,6 +158,80 @@ net.Receive("AI_GROQ_OpenConfig", function()
 	end
 end)
 
+local localAIFrame
+
+net.Receive("AI_GROQ_LocalModelsResult", function()
+	local success = net.ReadBool()
+	local message = net.ReadString()
+	local count = math.min(net.ReadUInt(7), 100)
+	local models = {}
+	for index = 1, count do
+		models[index] = net.ReadString()
+	end
+
+	if not success or #models == 0 then
+		chat.AddText(Color(255, 190, 90), "[Local AI] ", color_white, message)
+		return
+	end
+
+	if IsValid(localAIFrame) then
+		localAIFrame:Close()
+	end
+
+	localAIFrame = vgui.Create("DFrame")
+	localAIFrame:SetTitle("Local AI - Ollama Models")
+	localAIFrame:SetSize(460, 420)
+	localAIFrame:Center()
+	localAIFrame:MakePopup()
+
+	local status = vgui.Create("DLabel", localAIFrame)
+	status:SetPos(16, 34)
+	status:SetSize(428, 36)
+	status:SetText(message)
+	status:SetWrap(true)
+
+	local modelList = vgui.Create("DListView", localAIFrame)
+	modelList:SetPos(16, 76)
+	modelList:SetSize(428, 270)
+	modelList:AddColumn("Installed models")
+	for _, model in ipairs(models) do
+		modelList:AddLine(model)
+	end
+	modelList:SelectFirstItem()
+
+	local selectButton = vgui.Create("DButton", localAIFrame)
+	selectButton:SetText("Use selected model")
+	selectButton:SetPos(16, 364)
+	selectButton:SetSize(200, 32)
+	selectButton.DoClick = function()
+		local selectedLine = modelList:GetSelectedLine()
+		local selected = selectedLine and modelList:GetLine(selectedLine)
+		if not selected then
+			status:SetText("Select a model first.")
+			return
+		end
+		net.Start("AI_GROQ_SelectLocalModel")
+			net.WriteString(selected:GetValue(1))
+		net.SendToServer()
+	end
+
+	local closeButton = vgui.Create("DButton", localAIFrame)
+	closeButton:SetText("Close")
+	closeButton:SetPos(232, 364)
+	closeButton:SetSize(100, 32)
+	closeButton.DoClick = function()
+		localAIFrame:Close()
+	end
+end)
+
+net.Receive("AI_GROQ_LocalModelSelected", function()
+	local model = net.ReadString()
+	chat.AddText(Color(120, 220, 140), "[Local AI] ", color_white, "Now using Ollama model: " .. model)
+	if IsValid(localAIFrame) then
+		localAIFrame:Close()
+	end
+end)
+
 concommand.Add("ai_config_menu", function()
 	net.Start("AI_GROQ_RequestConfig")
 	net.SendToServer()
@@ -160,5 +239,10 @@ end)
 
 concommand.Add("ai_config", function()
 	net.Start("AI_GROQ_RequestConfig")
+	net.SendToServer()
+end)
+
+concommand.Add("local_ai_config", function()
+	net.Start("AI_GROQ_LocalModelsRequest")
 	net.SendToServer()
 end)

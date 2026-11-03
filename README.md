@@ -19,6 +19,7 @@ Ask for a prop, a weapon, an NPC, a vehicle, or just a quick answer. The assista
 - 🪟 Get responses in chat or a small pop-up.
 - 🎭 Set an optional server-wide persona.
 - 🔌 Choose from Groq, OpenAI, OpenRouter, Anthropic, Gemini, Hugging Face, Cerebras, DeepSeek, and xAI.
+- 🏠 Run Ollama locally and choose from models installed on the game server.
 - 🛡️ Apply server-side blacklist, permission, and spawn-limit checks.
 
 The assistant needs an API key for a supported provider. API usage may incur charges from that provider.
@@ -55,6 +56,17 @@ The assistant needs an API key for a supported provider. API usage may incur cha
 
 Admins can also open the configuration menu with `ai_config` or `ai_config_menu`. The menu can save a new key without showing the currently saved key.
 
+### Use a local Ollama model
+
+Ollama must be running on the **same machine as the Garry's Mod server**, listening on its default address (`127.0.0.1:11434`). On that machine, install at least one model and start Ollama:
+
+```text
+ollama pull llama3.2
+ollama serve
+```
+
+Then an in-game admin runs `local_ai_config` in the client console. The addon checks the server's Ollama installation, shows its installed models, and lets the admin select one for the whole server. AI requests then use that model without a cloud API key. If the game server is hosted elsewhere, Ollama must be installed on that host; the addon intentionally does not accept a user-supplied network address.
+
 ## Commands
 
 | Command | Who can use it | What it does |
@@ -62,6 +74,7 @@ Admins can also open the configuration menu with `ai_config` or `ai_config_menu`
 | `!ai <request>` | Players | Send a request to the assistant |
 | `ai <request>` | Server console | Send a request from the server console |
 | `ai_config` / `ai_config_menu` | Players | Open the configuration menu (only admins can save changes) |
+| `local_ai_config` | Admins | Detect server-local Ollama and choose an installed model |
 | `ai_set_api_key <provider> <key>` | Admin / server console | Set a provider API key |
 | `ai_set_provider <provider>` | Admin / server console | Choose the API provider |
 | `ai_set_model <model>` | Admin / server console | Choose the model |
@@ -73,7 +86,7 @@ Admins can also open the configuration menu with `ai_config` or `ai_config_menu`
 | `ai_chatlog_dump` / `ai_chatlog_clear` | Admin / server console | View or clear the in-memory public chat log |
 | `ai_errorlog_dump` / `ai_errorlog_clear` | Admin / server console | View or clear the in-memory error log |
 
-Supported provider names: `groq`, `openai`, `openrouter`, `anthropic`, `gemini`, `huggingface`, `cerebras`, `deepseek`, `xai`.
+Cloud provider names: `groq`, `openai`, `openrouter`, `anthropic`, `gemini`, `huggingface`, `cerebras`, `deepseek`, `xai`. Ollama is configured separately with `local_ai_config`.
 
 ## Safety & privacy
 
@@ -84,6 +97,7 @@ Supported provider names: `groq`, `openai`, `openrouter`, `anthropic`, `gemini`,
 - **Admin checks use actual Garry's Mod admin status.** A custom group name alone does not grant access.
 - **Private chat stays private from this addon.** Team-chat messages are not logged or sent to the AI. Public chat is only sent when an admin explicitly enables chat mode.
 - **Provider data handling:** requests and their conversation context are sent to the selected AI provider. Review that provider's privacy and retention policies before use.
+- **Local Ollama:** prompts are sent to the Ollama server on the game server host, not to a cloud provider.
 
 ## Configuration notes
 
@@ -104,6 +118,7 @@ Some relevant server settings:
 
 - **“Set ai_api_key…”** — Set a key for the selected provider in the server console.
 - **No response?** — Check that the assistant is enabled, the key is valid, and the server can reach the provider.
+- **Ollama not detected?** — Confirm Ollama is running on the game server machine and is listening at `127.0.0.1:11434`.
 - **An item is refused?** — It may not be registered in the server's spawn menu, may be admin-only, or may match an active blacklist.
 - **Need help?** — Check the server console and the admin-only `ai_errorlog_dump` output.
 

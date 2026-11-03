@@ -10,6 +10,9 @@ AI_GROQ.PlayerCooldowns = AI_GROQ.PlayerCooldowns or {}
 AI_GROQ.PlayerMemory = AI_GROQ.PlayerMemory or {}
 AI_GROQ.PlayerSpawnRecords = AI_GROQ.PlayerSpawnRecords or {}
 AI_GROQ.ConfigRequestTimes = AI_GROQ.ConfigRequestTimes or {}
+AI_GROQ.LocalAIRequestTimes = AI_GROQ.LocalAIRequestTimes or {}
+AI_GROQ.LocalAIModels = AI_GROQ.LocalAIModels or {}
+AI_GROQ.LocalAIModelsUpdatedAt = AI_GROQ.LocalAIModelsUpdatedAt or 0
 AI_GROQ.LastRequestTime = 0
 AI_GROQ.MemoryLimit = 4
 AI_GROQ.MaxActionsPerResponse = 3
@@ -27,6 +30,8 @@ AI_GROQ.Config.Endpoints = {
 	deepseek = "https://api.deepseek.com/chat/completions",
 	xai = "https://api.x.ai/v1/chat/completions"
 }
+AI_GROQ.Config.OllamaTagsEndpoint = "http://127.0.0.1:11434/api/tags"
+AI_GROQ.Config.OllamaChatEndpoint = "http://127.0.0.1:11434/api/chat"
 
 AI_GROQ.Config.DefaultModels = {
 	groq = "llama-3.3-70b-versatile",
@@ -93,7 +98,7 @@ AI_GROQ.Config.WeaponBlacklist = {
 }
 AI_GROQ.Config.DefaultWeaponBlacklist = table.Copy(AI_GROQ.Config.WeaponBlacklist)
 
-CreateConVar("ai_provider", "groq", bit.bor(FCVAR_ARCHIVE, FCVAR_UNLOGGED), "AI provider to use: groq | openai | openrouter | anthropic | gemini | huggingface | cerebras | deepseek | xai")
+CreateConVar("ai_provider", "groq", bit.bor(FCVAR_ARCHIVE, FCVAR_UNLOGGED), "AI provider to use: groq | openai | openrouter | anthropic | gemini | huggingface | cerebras | deepseek | xai | ollama")
 CreateConVar("ai_api_key_groq", "", bit.bor(FCVAR_ARCHIVE, FCVAR_UNLOGGED), "Groq API key")
 CreateConVar("ai_api_key_openai", "", bit.bor(FCVAR_ARCHIVE, FCVAR_UNLOGGED), "OpenAI API key")
 CreateConVar("ai_api_key_openrouter", "", bit.bor(FCVAR_ARCHIVE, FCVAR_UNLOGGED), "OpenRouter API key")
@@ -122,6 +127,10 @@ util.AddNetworkString("AI_GROQ_OpenWindow")
 util.AddNetworkString("AI_GROQ_OpenConfig")
 util.AddNetworkString("AI_GROQ_RequestConfig")
 util.AddNetworkString("AI_GROQ_UpdateConfig")
+util.AddNetworkString("AI_GROQ_LocalModelsRequest")
+util.AddNetworkString("AI_GROQ_LocalModelsResult")
+util.AddNetworkString("AI_GROQ_SelectLocalModel")
+util.AddNetworkString("AI_GROQ_LocalModelSelected")
 
 function AI_GROQ.GetPlayerCooldown(ply)
 	if not IsValid(ply) then return 0 end
@@ -150,6 +159,7 @@ end
 function AI_GROQ.GetApiProvider()
 	local cvar = GetConVar("ai_provider")
 	local provider = string.lower(cvar and cvar:GetString() or "groq")
+	if provider == "ollama" then return provider end
 	if not AI_GROQ.IsValidProvider(provider) then
 		provider = "groq"
 	end
@@ -170,6 +180,7 @@ end
 
 function AI_GROQ.GetApiKey()
 	local provider = AI_GROQ.GetApiProvider()
+	if provider == "ollama" then return "", provider end
 	local cvar = GetConVar("ai_api_key_" .. provider)
 	local key = cvar and cvar:GetString() or ""
 	return AI_GROQ.SanitizeKey(key), provider
@@ -184,6 +195,7 @@ function AI_GROQ.GetModel(provider)
 	provider = string.lower(tostring(provider or AI_GROQ.GetApiProvider()))
 	local cvar = GetConVar("ai_model")
 	local model = string.Trim(cvar and cvar:GetString() or "")
+	if provider == "ollama" then return model end
 	if model == "" then
 		return AI_GROQ.GetDefaultModel(provider)
 	end
@@ -198,10 +210,19 @@ end
 
 function AI_GROQ.GetProviderEndpoint(provider)
 	provider = string.lower(tostring(provider or "groq"))
+	if provider == "ollama" then
+		return AI_GROQ.Config.OllamaChatEndpoint
+	end
 	return AI_GROQ.Config.Endpoints[provider] or AI_GROQ.Config.Endpoints.groq
 end
 
 function AI_GROQ.GetProviderHeaders(provider, key)
+	if provider == "ollama" then
+		return {
+			["Content-Type"] = "application/json",
+			["Accept"] = "application/json"
+		}
+	end
 	key = AI_GROQ.SanitizeKey(key)
 	if provider == "anthropic" then
 		return {
@@ -952,7 +973,7 @@ function AI_GROQ.SendRequest(ply, userText, mode, retryCount, queued)
 	end
 
 	local key, provider = AI_GROQ.GetApiKey()
-	if not key or key == "" then
+	if provider ~= "ollama" and (not key or key == "") then
 		local msg = "Set ai_api_key_" .. provider .. " to your real API key before using the AI assistant."
 		if IsValid(ply) then
 			ply:ChatPrint(msg)
@@ -993,7 +1014,20 @@ function AI_GROQ.SendRequest(ply, userText, mode, retryCount, queued)
 	local systemPrompt = AI_GROQ.BuildSystemPrompt(ply)
 	local requestBody
 
-	if provider == "anthropic" then
+	if provider == "ollama" then
+		requestBody = util.TableToJSON({
+			model = model,
+			messages = {
+				{role = "system", content = systemPrompt},
+				{role = "user", content = promptText}
+			},
+			stream = false,
+			options = {
+				temperature = 0.2,
+				num_predict = 300
+			}
+		})
+	elseif provider == "anthropic" then
 		requestBody = util.TableToJSON({
 			model = model,
 			system = systemPrompt,
@@ -1138,7 +1172,10 @@ function AI_GROQ.SendRequest(ply, userText, mode, retryCount, queued)
 			end
 
 			local content = ""
-			if provider == "anthropic" then
+			if provider == "ollama" then
+				local message = type(decoded.message) == "table" and decoded.message or nil
+				content = type(message) == "table" and type(message.content) == "string" and message.content or ""
+			elseif provider == "anthropic" then
 				if type(decoded.content) == "table" then
 					for _, block in ipairs(decoded.content) do
 						if type(block) == "table" and type(block.text) == "string" then
@@ -1273,6 +1310,127 @@ function AI_GROQ.SendConfigToPlayer(ply)
 		net.WriteString(util.TableToJSON(keysConfigured))
 	net.Send(ply)
 end
+
+function AI_GROQ.IsValidLocalModelName(name)
+	return type(name) == "string"
+		and #name > 0
+		and #name <= 128
+		and string.match(name, "^[%w_][%w_%.:/%-]*$") ~= nil
+end
+
+function AI_GROQ.SendLocalModelsResult(ply, success, message, models)
+	if not IsValid(ply) then return end
+	models = models or {}
+	net.Start("AI_GROQ_LocalModelsResult")
+		net.WriteBool(success)
+		net.WriteString(AI_GROQ.SafeText(message, 180))
+		net.WriteUInt(#models, 7)
+		for _, model in ipairs(models) do
+			net.WriteString(model)
+		end
+	net.Send(ply)
+end
+
+function AI_GROQ.RequestLocalModels(ply)
+	if not IsValid(ply) then return end
+	if not AI_GROQ.IsULXAdmin(ply) then
+		AI_GROQ.SendLocalModelsResult(ply, false, "Only admins can configure the server's local AI.")
+		return
+	end
+	local lastRequest = AI_GROQ.LocalAIRequestTimes[ply]
+	if lastRequest and CurTime() - lastRequest < 5 then
+		AI_GROQ.SendLocalModelsResult(ply, false, "Please wait a few seconds before checking Ollama again.")
+		return
+	end
+	AI_GROQ.LocalAIRequestTimes[ply] = CurTime()
+	AI_GROQ.LocalAIModels = {}
+	AI_GROQ.LocalAIModelsUpdatedAt = 0
+
+	HTTP({
+		url = AI_GROQ.Config.OllamaTagsEndpoint,
+		method = "get",
+		timeout = 5,
+		success = function(code, body)
+			if not IsValid(ply) then return end
+			body = type(body) == "string" and body or ""
+			if code ~= 200 or #body > 65536 then
+				AI_GROQ.LogError("Ollama", "Model discovery failed with response code " .. tostring(code))
+				AI_GROQ.SendLocalModelsResult(ply, false, "Could not reach Ollama at 127.0.0.1:11434. Make sure Ollama is running on the game server.")
+				return
+			end
+			local ok, decoded = pcall(function() return util.JSONToTable(body) end)
+			if not ok or type(decoded) ~= "table" or type(decoded.models) ~= "table" then
+				AI_GROQ.LogError("Ollama", "Ollama returned an invalid model list.")
+				AI_GROQ.SendLocalModelsResult(ply, false, "Ollama returned an invalid model list.")
+				return
+			end
+
+			local models = {}
+			local seen = {}
+			for _, entry in ipairs(decoded.models) do
+				local name = type(entry) == "table" and entry.name or nil
+				if AI_GROQ.IsValidLocalModelName(name) and not seen[name] then
+					seen[name] = true
+					models[#models + 1] = name
+					if #models >= 100 then break end
+				end
+			end
+			table.sort(models)
+			AI_GROQ.LocalAIModels = models
+			AI_GROQ.LocalAIModelsUpdatedAt = CurTime()
+			if #models == 0 then
+				AI_GROQ.SendLocalModelsResult(ply, true, "Ollama is running, but no models are installed yet.")
+				return
+			end
+			AI_GROQ.SendLocalModelsResult(ply, true, "Choose an installed Ollama model for the server.")
+		end,
+		failed = function(err)
+			if not IsValid(ply) then return end
+			AI_GROQ.LogError("Ollama", "Model discovery request failed: " .. AI_GROQ.SafeText(err, 256))
+			AI_GROQ.SendLocalModelsResult(ply, false, "Could not reach Ollama at 127.0.0.1:11434. Make sure Ollama is running on the game server.")
+		end
+	})
+end
+
+net.Receive("AI_GROQ_LocalModelsRequest", function(len, ply)
+	if len ~= 0 then return end
+	AI_GROQ.RequestLocalModels(ply)
+end)
+
+net.Receive("AI_GROQ_SelectLocalModel", function(len, ply)
+	if not IsValid(ply) then return end
+	if len < 8 or len > 1200 then
+		AI_GROQ.SendLocalModelsResult(ply, false, "Invalid local model selection.")
+		return
+	end
+	if not AI_GROQ.IsULXAdmin(ply) then
+		AI_GROQ.SendLocalModelsResult(ply, false, "Only admins can configure the server's local AI.")
+		return
+	end
+	local model = net.ReadString()
+	if not AI_GROQ.IsValidLocalModelName(model) or CurTime() - AI_GROQ.LocalAIModelsUpdatedAt > 120 then
+		AI_GROQ.SendLocalModelsResult(ply, false, "Model list expired. Run local_ai_config and try again.")
+		return
+	end
+	for _, availableModel in ipairs(AI_GROQ.LocalAIModels) do
+		if model == availableModel then
+			local providerCVar = GetConVar("ai_provider")
+			local modelCVar = GetConVar("ai_model")
+			if not providerCVar or not modelCVar then
+				AI_GROQ.SendLocalModelsResult(ply, false, "Could not update the AI configuration.")
+				return
+			end
+			providerCVar:SetString("ollama")
+			modelCVar:SetString(model)
+			net.Start("AI_GROQ_LocalModelSelected")
+				net.WriteString(model)
+			net.Send(ply)
+			ply:ChatPrint("Local AI set to Ollama model: " .. model)
+			return
+		end
+	end
+	AI_GROQ.SendLocalModelsResult(ply, false, "That model was not in the latest Ollama model list. Refresh and try again.")
+end)
 
 net.Receive("AI_GROQ_RequestConfig", function(len, ply)
 	if not IsValid(ply) then return end
@@ -1566,6 +1724,9 @@ hook.Add("PlayerDisconnected", "AI_GROQ_PlayerDisconnected", function(ply)
 	end
 	if AI_GROQ.ConfigRequestTimes then
 		AI_GROQ.ConfigRequestTimes[ply] = nil
+	end
+	if AI_GROQ.LocalAIRequestTimes then
+		AI_GROQ.LocalAIRequestTimes[ply] = nil
 	end
 end)
 
